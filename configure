@@ -7188,6 +7188,11 @@ case "$target_name" in
     mttcg="yes"
     target_compiler=$cross_cc_xtensa
   ;;
+  z80)
+  	TARGET_ARCH=z80
+  	TARGET_BASE_ARCH=z80
+  	#target_compiler=$
+  ;;
   *)
     error_exit "Unsupported target CPU"
   ;;
