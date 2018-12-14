@@ -1,0 +1,6 @@
+obj-y += helper.o
+obj-y += helper2.o
+obj-y += machine.o
+obj-y += op.o
+obj-y += translate.o
+obj-y += z80-dis.o
