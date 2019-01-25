@@ -229,7 +229,9 @@ enum bfd_architecture
   bfd_arch_lm32,       /* Lattice Mico32 */
 #define bfd_mach_lm32 1
   bfd_arch_last
-  };
+
+#define bfd_mach_z80 0
+	};
 #define bfd_mach_s390_31 31
 #define bfd_mach_s390_64 64
 

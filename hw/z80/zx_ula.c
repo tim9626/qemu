@@ -23,10 +23,13 @@
  * THE SOFTWARE.
  */
 
-#include "hw.h"
+#include "hw/hw.h"
 #include "isa.h"
 #include "console.h"
 #include "zx_ula.h"
+
+#include "opreg_template.h"
+#include "opreg_template2.h"
 
 typedef struct {
     DisplayState *ds;

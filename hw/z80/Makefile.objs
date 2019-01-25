@@ -1,2 +1,2 @@
-obj-y += zx_spectrum.o
-obj-y += zx_ula.o
+#obj-y += zx_spectrum.o
+#obj-y += zx_ula.o

@@ -22,13 +22,16 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "hw.h"
+#include "hw/hw.h"
 #include "qemu-timer.h"
 #include "console.h"
 #include "isa.h"
 #include "sysemu.h"
 #include "zx_ula.h"
 #include "boards.h"
+
+#include "opreg_template.h"
+#include "opreg_template2.h"
 
 #ifdef CONFIG_LIBSPECTRUM
 #include <libspectrum.h>

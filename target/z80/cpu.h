@@ -21,15 +21,10 @@
 #ifndef CPU_Z80_H
 #define CPU_Z80_H
 
-#include "config-host.h"
-#include "config-target.h"
+#include "qemu-common.h"
+#include "qemu/bswap.h"
+#include "cpu-qom.h"
 
-#define QTAILQ_INSERT_TAIL(head, elm, field) do {
-    (elm)->field.tqe_next = NULL;
-    (elm)->field.tqe_prev = (head)->tqh_last;
-    *(head)->tqh_last = (elm);
-    (head)->tqh_last = &(elm)->field.tqe_next;
-}
 
 #define TARGET_LONG_BITS 32
 
@@ -43,10 +38,31 @@
 
 #define ELF_MACHINE	EM_NONE
 
-#include "qom/cpu.h"
+#define CPUArchState struct CPUZ80State
+
 #include "exec/cpu-defs.h"
-#include "qemu-common.h"
-#include "fpu/softfloat.h"
+
+#define TARGET_PAGE_BITS 16
+
+#define TARGET_PHYS_ADDR_SPACE_BITS 16
+#ifdef CONFIG_USER_ONLY
+# define TARGET_VIRT_ADDR_SPACE_BITS 16
+#else
+# define TARGET_VIRT_ADDR_SPACE_BITS 16
+#endif
+
+#define SR_MD 30
+#define SR_RB 29
+#define SR_BL 28
+#define SR_FD 15
+#define SR_M  9
+#define SR_Q  8
+#define SR_I3 7
+#define SR_I2 6
+#define SR_I1 5
+#define SR_I0 4
+#define SR_S  1
+#define SR_T  0
 
 /* Z80 registers */
 
@@ -143,6 +159,13 @@
 #define EXCP11_ALGN	17
 #define EXCP12_MCHK	18
 
+#define DELAY_SLOT_MASK        0x7
+#define DELAY_SLOT             (1 << 0)
+#define DELAY_SLOT_CONDITIONAL (1 << 1)
+#define DELAY_SLOT_RTE         (1 << 2)
+
+#define TB_FLAG_PENDING_MOVCA  (1 << 3)
+
 enum {
     CC_OP_DYNAMIC, /* must use dynamic code to get cc_op */
     CC_OP_EFLAGS,  /* all cc are explicitely computed, CC_SRC = flags */
@@ -154,7 +177,92 @@ enum {
 
 #define NB_MMU_MODES 2
 
-typedef struct CPUZ80State {
+struct z80_def_t {
+    const char *name;
+    target_ulong iu_version;
+    uint32_t fpu_version;
+    uint32_t mmu_version;
+    uint32_t mmu_bm;
+    uint32_t mmu_ctpr_mask;
+    uint32_t mmu_cxr_mask;
+    uint32_t mmu_sfsr_mask;
+    uint32_t mmu_trcr_mask;
+    uint32_t mxcc_version;
+    uint32_t features;
+    uint32_t nwindows;
+    uint32_t maxtl;
+};
+
+#define FPSCR_MASK             (0x003fffff)
+#define FPSCR_RM_MASK          (0x03 << 0)
+#define FPSCR_RM_NEAREST       (0 << 0)
+#define FPSCR_RM_ZERO          (1 << 0)
+#define FPSCR_FR               (1 << 21)
+#define FPSCR_SZ               (1 << 20)
+#define FPSCR_PR               (1 << 19)
+#define FPSCR_DN               (1 << 18)
+#define FPSCR_CAUSE_MASK       (0x3f << 12)
+#define FPSCR_CAUSE_SHIFT      (12)
+#define FPSCR_CAUSE_E          (1 << 17)
+#define FPSCR_CAUSE_V          (1 << 16)
+#define FPSCR_CAUSE_Z          (1 << 15)
+#define FPSCR_CAUSE_O          (1 << 14)
+#define FPSCR_CAUSE_U          (1 << 13)
+#define FPSCR_CAUSE_I          (1 << 12)
+#define FPSCR_ENABLE_MASK      (0x1f << 7)
+#define FPSCR_ENABLE_SHIFT     (7)
+#define FPSCR_ENABLE_V         (1 << 11)
+#define FPSCR_ENABLE_Z         (1 << 10)
+#define FPSCR_ENABLE_O         (1 << 9)
+#define FPSCR_ENABLE_U         (1 << 8)
+#define FPSCR_ENABLE_I         (1 << 7)
+#define FPSCR_FLAG_MASK        (0x1f << 2)
+#define FPSCR_FLAG_SHIFT       (2)
+#define FPSCR_FLAG_V           (1 << 6)
+#define FPSCR_FLAG_Z           (1 << 5)
+#define FPSCR_FLAG_O           (1 << 4)
+#define FPSCR_FLAG_U           (1 << 3)
+#define FPSCR_FLAG_I           (1 << 2)
+#define DELAY_SLOT_MASK        0x7
+#define GUSA_SHIFT             4
+#ifdef CONFIG_USER_ONLY
+#define GUSA_EXCLUSIVE         (1 << 12)
+#define GUSA_MASK              ((0xff << GUSA_SHIFT) | GUSA_EXCLUSIVE)
+#else
+/* Provide dummy versions of the above to allow tests against tbflags
+   to be elided while avoiding ifdefs.  */
+#define GUSA_EXCLUSIVE         0
+#define GUSA_MASK              0
+#endif
+#define TB_FLAG_ENVFLAGS_MASK  (DELAY_SLOT_MASK | GUSA_MASK)
+#define UTLB_SIZE 64
+#define ITLB_SIZE 4
+
+typedef struct tlb_t {
+    uint32_t vpn;		/* virtual page number */
+    uint32_t ppn;		/* physical page number */
+    uint32_t size;		/* mapped page size in bytes */
+    uint8_t asid;		/* address space identifier */
+    uint8_t v:1;		/* validity */
+    uint8_t sz:2;		/* page size */
+    uint8_t sh:1;		/* share status */
+    uint8_t c:1;		/* cacheability */
+    uint8_t pr:2;		/* protection key */
+    uint8_t d:1;		/* dirty */
+    uint8_t wt:1;		/* write through */
+    uint8_t sa:3;		/* space attribute (PCMCIA) */
+    uint8_t tc:1;		/* timing control */
+} tlb_t;
+
+typedef struct memory_content {
+    uint32_t address;
+    uint32_t value;
+    struct memory_content *next;
+} memory_content;
+
+typedef struct CPUZ80State CPUZ80State;
+
+struct CPUZ80State {
 #if TARGET_LONG_BITS > HOST_LONG_BITS
     /* temporaries if we cannot store them in host registers */
     target_ulong t0, t1, t2;
@@ -164,6 +272,11 @@ typedef struct CPUZ80State {
     uint16_t pc;
     /* not sure if this is messy: */
     target_ulong regs[CPU_NB_REGS];
+
+	uint32_t sr; /* status register (with T split out) */
+	uint32_t sr_m; /* M bit of status register */
+	uint32_t sr_q; /* Q bit of status register */
+	uint32_t sr_t; /* T bit of status register */
 
     int iff1;
     int iff2;
@@ -201,13 +314,53 @@ typedef struct CPUZ80State {
     int interrupt_request;
     int user_mode_only; /* user mode only simulation */
     int halted;
+    struct {} end_reset_fields;
+    uint32_t ssr;		/* saved status register */
+	uint32_t spc; /* saved program counter */
+	uint32_t gbr; /* global base register */
+	uint32_t vbr; /* vector base register */
+	uint32_t sgr; /* saved global register 15 */
+	uint32_t dbr; /* debug base register */
+	void *intc_handle;
+    uint32_t expevt;		/* exception event register */
+    uint32_t intevt;		/* interrupt event register */
+    uint32_t mmucr;		/* MMU control register */
+	uint32_t pteh; /* page table entry high register */
+	uint32_t ptel; /* page table entry low register */
+	uint32_t ptea; /* page table entry assistance register */
+	uint32_t ttb; /* tranlation table base register */
+	uint32_t tea; /* TLB exception address register */
+	tlb_t utlb[UTLB_SIZE];
+	tlb_t itlb[ITLB_SIZE];
+	/* LDST = LOCK_ADDR != -1.  */
+	uint32_t lock_addr;
+	uint32_t lock_value;
+	uint32_t pr;		/* procedure register */
+	uint32_t fpul;		/* floating point communication register */
+	uint32_t flags;		/* general execution flags */
+	uint32_t delayed_pc;        /* target of delayed branch */
+	uint32_t delayed_cond;      /* condition of delayed branch */
+	/* The features that we should emulate. See sh_features above.  */
+	uint32_t features;
 
     CPU_COMMON
+
+	int in_sleep;
+    uint32_t tra;
+    uint32_t mach;		/* multiply and accumulate high */
+    uint32_t macl;		/* multiply and accumulate low */
+    memory_content *movcal_backup;
+    memory_content **movcal_backup_tail;
+	uint32_t fpscr; /* floating point status/control register */
+	/* float point status register */
+	float_status fp_status;
+	uint32_t gregs[24];		/* general registers */
+	float32 fregs[32];		/* floating point registers */
 
     /* in order to simplify APIC support, we leave this pointer to the
        user */
     struct APICState *apic_state;
-} CPUZ80State;
+};
 
 struct Z80CPU {
     /*< private >*/
@@ -217,56 +370,187 @@ struct Z80CPU {
     CPUZ80State env;
 };
 
-CPUZ80State *cpu_z80_init(const char *cpu_model);
-int cpu_z80_exec(CPUZ80State *s);
-void cpu_z80_close(CPUZ80State *s);
-int cpu_get_pic_interrupt(CPUZ80State *s);
-
-/* wrapper, just in case memory mappings must be changed */
-static inline void cpu_z80_set_cpl(CPUZ80State *s, int cpl)
-{
-#if HF_CPL_MASK == 3
-    s->hflags = (s->hflags & ~HF_CPL_MASK) | cpl;
-#else
-#error HF_CPL_MASK is hardcoded
-#endif
+static inline struct Z80CPU *z80_env_get_cpu(const CPUZ80State *env) {
+    return container_of(env, Z80CPU, env);
 }
 
-/* you can call this signal handler from your SIGBUS and SIGSEGV
-   signal handlers to inform the virtual CPU of exceptions. non zero
-   is returned if the signal was handled by the virtual CPU.  */
-struct siginfo;
-int cpu_z80_signal_handler(int host_signum, struct siginfo *info,
+#define ENV_GET_CPU(e) CPU(z80_env_get_cpu(e))
+
+#define ENV_OFFSET offsetof(Z80CPU, env)
+
+void z80_cpu_do_interrupt(CPUState *cpu);
+bool z80_cpu_exec_interrupt(CPUState *cpu, int int_req);
+void z80_cpu_dump_state(CPUState *cpu, FILE *f,
+                           fprintf_function cpu_fprintf, int flags);
+hwaddr z80_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
+int z80_cpu_gdb_read_register(CPUState *cpu, uint8_t *buf, int reg);
+int z80_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
+void z80_cpu_do_unaligned_access(CPUState *cpu, vaddr addr,
+                                    MMUAccessType access_type,
+                                    int mmu_idx, uintptr_t retaddr);
+
+void z80_translate_init(void);
+int cpu_z80_signal_handler(int host_signum, void *pinfo,
                            void *puc);
+int z80_cpu_handle_mmu_fault(CPUState *cpu, vaddr address, int size, int rw,
+                                int mmu_idx);
 
-uint64_t cpu_get_tsc(CPUZ80State *env);
+void z80_cpu_list(FILE *f, fprintf_function cpu_fprintf);
 
-void cpu_set_apic_base(CPUZ80State *env, uint64_t val);
-uint64_t cpu_get_apic_base(CPUZ80State *env);
-void cpu_set_apic_tpr(CPUZ80State *env, uint8_t val);
-#ifndef NO_CPU_IO_DEFS
-uint8_t cpu_get_apic_tpr(CPUZ80State *env);
+#if !defined(CONFIG_USER_ONLY)
+void cpu_z80_invalidate_tlb(CPUZ80State *s);
+uint32_t cpu_z80_read_mmaped_itlb_addr(CPUZ80State *s,
+                                       hwaddr addr);
+void cpu_z80_write_mmaped_itlb_addr(CPUZ80State *s, hwaddr addr,
+                                    uint32_t mem_value);
+uint32_t cpu_z80_read_mmaped_itlb_data(CPUZ80State *s,
+                                       hwaddr addr);
+void cpu_z80_write_mmaped_itlb_data(CPUZ80State *s, hwaddr addr,
+                                    uint32_t mem_value);
+uint32_t cpu_z80_read_mmaped_utlb_addr(CPUZ80State *s,
+                                       hwaddr addr);
+void cpu_z80_write_mmaped_utlb_addr(CPUZ80State *s, hwaddr addr,
+                                    uint32_t mem_value);
+uint32_t cpu_z80_read_mmaped_utlb_data(CPUZ80State *s,
+                                       hwaddr addr);
+void cpu_z80_write_mmaped_utlb_data(CPUZ80State *s, hwaddr addr,
+                                    uint32_t mem_value);
 #endif
-void cpu_smm_update(CPUZ80State *env);
 
-#define TARGET_PAGE_BITS 12
+int cpu_z80_is_cached(CPUZ80State * env, target_ulong addr);
 
-#define CPUState struct Z80CPU
-#define cpu_init cpu_z80_init
-#define cpu_exec cpu_z80_exec
-#define cpu_gen_code cpu_z80_gen_code
+void cpu_load_tlb(CPUZ80State * env);
+
+#define Z80_CPU_TYPE_SUFFIX "-" TYPE_Z80_CPU
+#define Z80_CPU_TYPE_NAME(model) model Z80_CPU_TYPE_SUFFIX
+#define CPU_RESOLVING_TYPE TYPE_Z80_CPU
+
 #define cpu_signal_handler cpu_z80_signal_handler
+#define cpu_list z80_cpu_list
 
 /* MMU modes definitions */
 #define MMU_MODE0_SUFFIX _kernel
 #define MMU_MODE1_SUFFIX _user
 #define MMU_USER_IDX 1
-static inline int cpu_mmu_index (CPUState *env)
+static inline int cpu_mmu_index (CPUZ80State *env, bool ifetch)
 {
-    /* return (env->hflags & HF_CPL_MASK) == 3 ? 1 : 0; */
-    return 0;
+	/* return (env->hflags & HF_CPL_MASK) == 3 ? 1 : 0; */
+	return 0;
 }
 
 #include "exec/cpu-all.h"
+
+/* Memory access type */
+enum {
+    /* Privilege */
+    ACCESS_PRIV = 0x01,
+    /* Direction */
+    ACCESS_WRITE = 0x02,
+    /* Type of instruction */
+    ACCESS_CODE = 0x10,
+    ACCESS_INT = 0x20
+};
+
+/* MMU control register */
+#define MMUCR    0x1F000010
+#define MMUCR_AT (1<<0)
+#define MMUCR_TI (1<<2)
+#define MMUCR_SV (1<<8)
+#define MMUCR_URC_BITS (6)
+#define MMUCR_URC_OFFSET (10)
+#define MMUCR_URC_SIZE (1 << MMUCR_URC_BITS)
+#define MMUCR_URC_MASK (((MMUCR_URC_SIZE) - 1) << MMUCR_URC_OFFSET)
+static inline int cpu_mmucr_urc (uint32_t mmucr)
+{
+    return ((mmucr & MMUCR_URC_MASK) >> MMUCR_URC_OFFSET);
+}
+
+/* PTEH : Page Translation Entry High register */
+#define PTEH_ASID_BITS (8)
+#define PTEH_ASID_SIZE (1 << PTEH_ASID_BITS)
+#define PTEH_ASID_MASK (PTEH_ASID_SIZE - 1)
+#define cpu_pteh_asid(pteh) ((pteh) & PTEH_ASID_MASK)
+#define PTEH_VPN_BITS (22)
+#define PTEH_VPN_OFFSET (10)
+#define PTEH_VPN_SIZE (1 << PTEH_VPN_BITS)
+#define PTEH_VPN_MASK (((PTEH_VPN_SIZE) - 1) << PTEH_VPN_OFFSET)
+static inline int cpu_pteh_vpn (uint32_t pteh)
+{
+    return ((pteh & PTEH_VPN_MASK) >> PTEH_VPN_OFFSET);
+}
+
+/* PTEL : Page Translation Entry Low register */
+#define PTEL_V        (1 << 8)
+#define cpu_ptel_v(ptel) (((ptel) & PTEL_V) >> 8)
+#define PTEL_C        (1 << 3)
+#define cpu_ptel_c(ptel) (((ptel) & PTEL_C) >> 3)
+#define PTEL_D        (1 << 2)
+#define cpu_ptel_d(ptel) (((ptel) & PTEL_D) >> 2)
+#define PTEL_SH       (1 << 1)
+#define cpu_ptel_sh(ptel)(((ptel) & PTEL_SH) >> 1)
+#define PTEL_WT       (1 << 0)
+#define cpu_ptel_wt(ptel) ((ptel) & PTEL_WT)
+
+#define PTEL_SZ_HIGH_OFFSET  (7)
+#define PTEL_SZ_HIGH  (1 << PTEL_SZ_HIGH_OFFSET)
+#define PTEL_SZ_LOW_OFFSET   (4)
+#define PTEL_SZ_LOW   (1 << PTEL_SZ_LOW_OFFSET)
+static inline int cpu_ptel_sz (uint32_t ptel)
+{
+    int sz;
+    sz = (ptel & PTEL_SZ_HIGH) >> PTEL_SZ_HIGH_OFFSET;
+    sz <<= 1;
+    sz |= (ptel & PTEL_SZ_LOW) >> PTEL_SZ_LOW_OFFSET;
+    return sz;
+}
+
+#define PTEL_PPN_BITS (19)
+#define PTEL_PPN_OFFSET (10)
+#define PTEL_PPN_SIZE (1 << PTEL_PPN_BITS)
+#define PTEL_PPN_MASK (((PTEL_PPN_SIZE) - 1) << PTEL_PPN_OFFSET)
+static inline int cpu_ptel_ppn (uint32_t ptel)
+{
+    return ((ptel & PTEL_PPN_MASK) >> PTEL_PPN_OFFSET);
+}
+
+#define PTEL_PR_BITS   (2)
+#define PTEL_PR_OFFSET (5)
+#define PTEL_PR_SIZE (1 << PTEL_PR_BITS)
+#define PTEL_PR_MASK (((PTEL_PR_SIZE) - 1) << PTEL_PR_OFFSET)
+static inline int cpu_ptel_pr (uint32_t ptel)
+{
+    return ((ptel & PTEL_PR_MASK) >> PTEL_PR_OFFSET);
+}
+
+/* PTEA : Page Translation Entry Assistance register */
+#define PTEA_SA_BITS (3)
+#define PTEA_SA_SIZE (1 << PTEA_SA_BITS)
+#define PTEA_SA_MASK (PTEA_SA_SIZE - 1)
+#define cpu_ptea_sa(ptea) ((ptea) & PTEA_SA_MASK)
+#define PTEA_TC        (1 << 3)
+#define cpu_ptea_tc(ptea) (((ptea) & PTEA_TC) >> 3)
+
+static inline target_ulong cpu_read_sr(CPUZ80State *env)
+{
+    return env->sr | (env->sr_m << SR_M) |
+                     (env->sr_q << SR_Q) |
+                     (env->sr_t << SR_T);
+}
+
+static inline void cpu_write_sr(CPUZ80State *env, target_ulong sr)
+{
+    env->sr_m = (sr >> SR_M) & 1;
+    env->sr_q = (sr >> SR_Q) & 1;
+    env->sr_t = (sr >> SR_T) & 1;
+    env->sr = sr & ~((1u << SR_M) | (1u << SR_Q) | (1u << SR_T));
+}
+
+static inline void cpu_get_tb_cpu_state(CPUZ80State *env, target_ulong *pc,
+                                        target_ulong *cs_base, uint32_t *flags)
+{
+	*pc = env->pc;
+	*cs_base = 0;
+	*flags = env->hflags;
+}
 
 #endif /* CPU_Z80_H */

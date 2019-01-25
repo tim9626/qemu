@@ -1,6 +1,9 @@
+obj-y += op_helper.o
+obj-y += cpu.o
 obj-y += helper.o
-obj-y += helper2.o
-obj-y += machine.o
-obj-y += op.o
+obj-y += gdbstub.o
+#obj-y += helper2.o
+#obj-y += machine.o
+#obj-y += op.o
 obj-y += translate.o
-obj-y += z80-dis.o
+#obj-y += z80-dis.o
