@@ -93,7 +93,6 @@ void module_call_init(module_init_type type)
     ModuleEntry *e;
 
     l = find_type(type);
-
     QTAILQ_FOREACH(e, l, node) {
         e->init();
     }

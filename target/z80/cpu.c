@@ -214,9 +214,9 @@ static const TypeInfo z80_cpu_type_infos[] = {
         .abstract = true,
         .class_size = sizeof(Z80CPUClass),
         .class_init = z80_cpu_class_init,
-    },
+    }/*,
     DEFINE_Z80_CPU_TYPE(TYPE_Z80_CPU, z80_cpu_class_init,
-                           z80_cpu_initfn),
+                           z80_cpu_initfn)*/,
 
 };
 

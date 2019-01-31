@@ -177,6 +177,31 @@ enum {
 
 #define NB_MMU_MODES 2
 
+/* TLB size */
+enum {
+    TLB_SIZE = 128,
+    TLB_MASK = TLB_SIZE - 1,
+};
+
+typedef struct Z80TLBEntry {
+    uint32_t mr;
+    uint32_t tr;
+} Z80TLBEntry;
+
+typedef struct CPUZ80TLBContext {
+    Z80TLBEntry itlb[TLB_SIZE];
+    Z80TLBEntry dtlb[TLB_SIZE];
+
+    int (*cpu_z80_map_address_code)(struct Z80CPU *cpu,
+                                         hwaddr *physical,
+                                         int *prot,
+                                         target_ulong address, int rw);
+    int (*cpu_z80_map_address_data)(struct Z80CPU *cpu,
+                                         hwaddr *physical,
+                                         int *prot,
+                                         target_ulong address, int rw);
+} CPUZ80TLBContext;
+
 struct z80_def_t {
     const char *name;
     target_ulong iu_version;
@@ -268,8 +293,10 @@ struct CPUZ80State {
     target_ulong t0, t1, t2;
 #endif
 
+    target_ulong shadow_gpr[16][32];
+
     /* Z80 registers */
-    uint16_t pc;
+    uint32_t pc;
     /* not sure if this is messy: */
     target_ulong regs[CPU_NB_REGS];
 
