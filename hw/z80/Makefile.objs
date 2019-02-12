@@ -1,2 +1,4 @@
 obj-y += zx_spectrum.o
+#obj-y += zx_keyboard.o
 #obj-y += zx_ula.o
+#obj-y += zx_video.o
