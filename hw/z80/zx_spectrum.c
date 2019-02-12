@@ -374,7 +374,7 @@ static void zx_spectrum_common_init(ram_addr_t ram_size,
     if (!cpu_model) {
         cpu_model = "z80";
     }
-    env = cpu_init(cpu_model);
+    env = (CPUState*) cpu_z80_init(cpu_model);
     zx_env = env; // XXX
     register_savevm("cpu", 0, 4, cpu_save, cpu_load, env);
     qemu_register_reset(main_cpu_reset, 0, env);

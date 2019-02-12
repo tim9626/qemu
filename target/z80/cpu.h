@@ -401,6 +401,8 @@ static inline struct Z80CPU *z80_env_get_cpu(const CPUZ80State *env) {
     return container_of(env, Z80CPU, env);
 }
 
+Z80CPU* cpu_z80_init(const char* cpu_model);
+
 #define ENV_GET_CPU(e) CPU(z80_env_get_cpu(e))
 
 #define ENV_OFFSET offsetof(Z80CPU, env)

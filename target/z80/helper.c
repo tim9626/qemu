@@ -195,6 +195,11 @@ void z80_cpu_do_interrupt(CPUState *cs)
     }
 }
 
+Z80CPU* cpu_z80_init(const char* cpu_model)
+{
+    return Z80_CPU(cpu_gen_init(TYPE_Z80_CPU, cpu_model));
+}
+
 static void update_itlb_use(CPUZ80State * env, int itlbnb)
 {
     uint8_t or_mask = 0, and_mask = (uint8_t) - 1;
