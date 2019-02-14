@@ -1,13 +1,12 @@
 /*
- * Z80 gdb server stub
+ * QEMU Z80 CPU
  *
- * Copyright (c) 2003-2005 Fabrice Bellard
- * Copyright (c) 2013 SUSE LINUX Products GmbH
+ * Copyright (c) 2016 Michael Rolnik
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,63 +14,39 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ * License along with this library; if not, see
+ * <http://www.gnu.org/licenses/lgpl-2.1.html>
  */
+
 #include "qemu/osdep.h"
 #include "qemu-common.h"
-#include "cpu.h"
 #include "exec/gdbstub.h"
-
-/* Hint: Use "set architecture z80" in GDB to see fpu registers */
-/* FIXME: We should use XML for this.  */
 
 int z80_cpu_gdb_read_register(CPUState *cs, uint8_t *mem_buf, int n)
 {
     Z80CPU *cpu = Z80_CPU(cs);
     CPUZ80State *env = &cpu->env;
 
-    switch (n) {
-    case 0 ... 7:
-        if ((env->sr & (1u << SR_MD)) && (env->sr & (1u << SR_RB))) {
-            return gdb_get_regl(mem_buf, env->gregs[n + 16]);
-        } else {
-            return gdb_get_regl(mem_buf, env->gregs[n]);
-        }
-    case 8 ... 15:
-        return gdb_get_regl(mem_buf, env->gregs[n]);
-    case 16:
-        return gdb_get_regl(mem_buf, env->pc);
-    case 17:
-        return gdb_get_regl(mem_buf, env->pr);
-    case 18:
-        return gdb_get_regl(mem_buf, env->gbr);
-    case 19:
-        return gdb_get_regl(mem_buf, env->vbr);
-    case 20:
-        return gdb_get_regl(mem_buf, env->mach);
-    case 21:
-        return gdb_get_regl(mem_buf, env->macl);
-    case 22:
-        return gdb_get_regl(mem_buf, cpu_read_sr(env));
-    case 23:
-        return gdb_get_regl(mem_buf, env->fpul);
-    case 24:
-        return gdb_get_regl(mem_buf, env->fpscr);
-    case 25 ... 40:
-        if (env->fpscr & FPSCR_FR) {
-            stfl_p(mem_buf, env->fregs[n - 9]);
-        } else {
-            stfl_p(mem_buf, env->fregs[n - 25]);
-        }
-        return 4;
-    case 41:
-        return gdb_get_regl(mem_buf, env->ssr);
-    case 42:
-        return gdb_get_regl(mem_buf, env->spc);
-    case 43 ... 50:
-        return gdb_get_regl(mem_buf, env->gregs[n - 43]);
-    case 51 ... 58:
-        return gdb_get_regl(mem_buf, env->gregs[n - (51 - 16)]);
+    /*  R */
+    if (n < 32) {
+        return gdb_get_reg8(mem_buf, env->r[n]);
+    }
+
+    /*  SREG */
+    if (n == 32) {
+        uint8_t sreg = cpu_get_sreg(env);
+
+        return gdb_get_reg8(mem_buf, sreg);
+    }
+
+    /*  SP */
+    if (n == 33) {
+        return gdb_get_reg16(mem_buf, env->sp & 0x0000ffff);
+    }
+
+    /*  PC */
+    if (n == 34) {
+        return gdb_get_reg32(mem_buf, env->pc_w * 2);
     }
 
     return 0;
@@ -82,66 +57,29 @@ int z80_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
     Z80CPU *cpu = Z80_CPU(cs);
     CPUZ80State *env = &cpu->env;
 
-    switch (n) {
-    case 0 ... 7:
-        if ((env->sr & (1u << SR_MD)) && (env->sr & (1u << SR_RB))) {
-            env->gregs[n + 16] = ldl_p(mem_buf);
-        } else {
-            env->gregs[n] = ldl_p(mem_buf);
-        }
-        break;
-    case 8 ... 15:
-        env->gregs[n] = ldl_p(mem_buf);
-        break;
-    case 16:
-        env->pc = ldl_p(mem_buf);
-        break;
-    case 17:
-        env->pr = ldl_p(mem_buf);
-        break;
-    case 18:
-        env->gbr = ldl_p(mem_buf);
-        break;
-    case 19:
-        env->vbr = ldl_p(mem_buf);
-        break;
-    case 20:
-        env->mach = ldl_p(mem_buf);
-        break;
-    case 21:
-        env->macl = ldl_p(mem_buf);
-        break;
-    case 22:
-        cpu_write_sr(env, ldl_p(mem_buf));
-        break;
-    case 23:
-        env->fpul = ldl_p(mem_buf);
-        break;
-    case 24:
-        env->fpscr = ldl_p(mem_buf);
-        break;
-    case 25 ... 40:
-        if (env->fpscr & FPSCR_FR) {
-            env->fregs[n - 9] = ldfl_p(mem_buf);
-        } else {
-            env->fregs[n - 25] = ldfl_p(mem_buf);
-        }
-        break;
-    case 41:
-        env->ssr = ldl_p(mem_buf);
-        break;
-    case 42:
-        env->spc = ldl_p(mem_buf);
-        break;
-    case 43 ... 50:
-        env->gregs[n - 43] = ldl_p(mem_buf);
-        break;
-    case 51 ... 58:
-        env->gregs[n - (51 - 16)] = ldl_p(mem_buf);
-        break;
-    default:
-        return 0;
+    /*  R */
+    if (n < 32) {
+        env->r[n] = *mem_buf;
+        return 1;
     }
 
-    return 4;
+    /*  SREG */
+    if (n == 32) {
+        cpu_set_sreg(env, *mem_buf);
+        return 1;
+    }
+
+    /*  SP */
+    if (n == 33) {
+        env->sp = lduw_p(mem_buf);
+        return 2;
+    }
+
+    /*  PC */
+    if (n == 34) {
+        env->pc_w = ldl_p(mem_buf) / 2;
+        return 4;
+    }
+
+    return 0;
 }

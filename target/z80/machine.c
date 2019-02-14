@@ -1,12 +1,12 @@
 /*
- * OpenRISC Machine
+ * QEMU Z80 CPU
  *
- * Copyright (c) 2011-2012 Jia Liu <proljc@gmail.com>
+ * Copyright (c) 2016 Michael Rolnik
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -14,101 +14,103 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ * License along with this library; if not, see
+ * <http://www.gnu.org/licenses/lgpl-2.1.html>
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
-#include "cpu.h"
 #include "hw/hw.h"
+#include "cpu.h"
 #include "hw/boards.h"
-#include "migration/cpu.h"
+#include "migration/qemu-file.h"
 
-/*static const VMStateDescription vmstate_tlb_entry = {
-    .name = "tlb_entry",
-    .version_id = 1,
-    .minimum_version_id = 1,
-    .minimum_version_id_old = 1,
-    .fields = (VMStateField[]) {
-        VMSTATE_UINTTL(mr, Z80TLBEntry),
-        VMSTATE_UINTTL(tr, Z80TLBEntry),
-        VMSTATE_END_OF_LIST()
-    }
-};*/
-
-/*static const VMStateDescription vmstate_cpu_tlb = {
-    .name = "cpu_tlb",
-    .version_id = 2,
-    .minimum_version_id = 2,
-    .fields = (VMStateField[]) {
-        VMSTATE_STRUCT_ARRAY(itlb, CPUZ80TLBContext, TLB_SIZE, 0,
-                             vmstate_tlb_entry, Z80TLBEntry),
-        VMSTATE_STRUCT_ARRAY(dtlb, CPUZ80TLBContext, TLB_SIZE, 0,
-                             vmstate_tlb_entry, Z80TLBEntry),
-        VMSTATE_END_OF_LIST()
-    }
-};*/
-
-static int get_sr(QEMUFile *f, void *opaque, size_t size, VMStateField *field)
+static int get_sreg(QEMUFile *f, void *opaque, size_t size, VMStateField *field)
 {
     CPUZ80State *env = opaque;
-    cpu_write_sr(env, qemu_get_be32(f));
+    uint8_t sreg;
+
+    sreg = qemu_get_ubyte(f);
+    cpu_set_sreg(env, sreg);
     return 0;
 }
 
-static int put_sr(QEMUFile *f, void *opaque, size_t size,
-                  VMStateField *field, QJSON *vmdesc)
+static int put_sreg(QEMUFile *f, void *opaque, size_t size, VMStateField *field, QJSON *vmdesc)
 {
     CPUZ80State *env = opaque;
-    qemu_put_be32(f, cpu_read_sr(env));
+    uint8_t sreg = cpu_get_sreg(env);
+
+    qemu_put_byte(f, sreg);
     return 0;
 }
 
-static const VMStateInfo vmstate_sr = {
-    .name = "sr",
-    .get = get_sr,
-    .put = put_sr,
+static const VMStateInfo vms_sreg = {
+    .name = "sreg",
+    .get = get_sreg,
+    .put = put_sreg,
 };
 
-static const VMStateDescription vmstate_env = {
-    .name = "env",
-    .version_id = 6,
-    .minimum_version_id = 6,
-    .fields = (VMStateField[]) {
-        VMSTATE_UINTTL_2DARRAY(shadow_gpr, CPUZ80State, 16, 32),
-        VMSTATE_UINTTL(pc, CPUZ80State),
-        VMSTATE_UINTTL(lock_addr, CPUZ80State),
-        VMSTATE_UINTTL(lock_value, CPUZ80State),
-        /* Save the architecture value of the SR, not the internally
-           expanded version.  Since this architecture value does not
-           exist in memory to be stored, this requires a but of hoop
-           jumping.  We want OFFSET=0 so that we effectively pass ENV
-           to the helper functions, and we need to fill in the name by
-           hand since there's no field of that name.  */
-        {
-            .name = "sr",
-            .version_id = 0,
-            .size = sizeof(uint32_t),
-            .info = &vmstate_sr,
-            .flags = VMS_SINGLE,
-            .offset = 0
-        },
+static int get_segment(QEMUFile *f, void *opaque, size_t size, VMStateField *field)
+{
+    uint32_t *ramp = opaque;
+    uint8_t temp;
 
+    temp = qemu_get_ubyte(f);
+    *ramp = ((uint32_t)temp) << 16;
+    return 0;
+}
 
+static int put_segment(QEMUFile *f, void *opaque, size_t size, VMStateField *field, QJSON *vmdesc)
+{
+    uint32_t *ramp = opaque;
+    uint8_t temp = *ramp >> 16;
 
+    qemu_put_byte(f, temp);
+    return 0;
+}
 
-
-        VMSTATE_END_OF_LIST()
-    }
+static const VMStateInfo vms_rampD = {
+    .name = "rampD",
+    .get = get_segment,
+    .put = put_segment,
+};
+static const VMStateInfo vms_rampX = {
+    .name = "rampX",
+    .get = get_segment,
+    .put = put_segment,
+};
+static const VMStateInfo vms_rampY = {
+    .name = "rampY",
+    .get = get_segment,
+    .put = put_segment,
+};
+static const VMStateInfo vms_rampZ = {
+    .name = "rampZ",
+    .get = get_segment,
+    .put = put_segment,
+};
+static const VMStateInfo vms_eind = {
+    .name = "eind",
+    .get = get_segment,
+    .put = put_segment,
 };
 
-const VMStateDescription vmstate_z80_cpu = {
+const VMStateDescription vms_z80_cpu = {
     .name = "cpu",
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 0,
+    .minimum_version_id = 0,
     .fields = (VMStateField[]) {
-        VMSTATE_CPU(),
-        VMSTATE_STRUCT(env, Z80CPU, 1, vmstate_env, CPUZ80State),
+        VMSTATE_UINT32(env.pc_w, Z80CPU),
+        VMSTATE_UINT32(env.sp, Z80CPU),
+
+        VMSTATE_UINT32_ARRAY(env.r, Z80CPU, Z80_CPU_REGS),
+
+        VMSTATE_SINGLE(env, Z80CPU, 0, vms_sreg, CPUZ80State),
+        VMSTATE_SINGLE(env.rampD, Z80CPU, 0, vms_rampD, uint32_t),
+        VMSTATE_SINGLE(env.rampX, Z80CPU, 0, vms_rampX, uint32_t),
+        VMSTATE_SINGLE(env.rampY, Z80CPU, 0, vms_rampY, uint32_t),
+        VMSTATE_SINGLE(env.rampZ, Z80CPU, 0, vms_rampZ, uint32_t),
+        VMSTATE_SINGLE(env.eind, Z80CPU, 0, vms_eind, uint32_t),
+
         VMSTATE_END_OF_LIST()
     }
 };
