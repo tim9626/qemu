@@ -20,15 +20,21 @@
 
 
 #include "qemu/osdep.h"
-#include "tcg/tcg.h"
+
+#include "qemu/host-utils.h"
 #include "cpu.h"
-#include "exec/exec-all.h"
 #include "disas/disas.h"
+#include "exec/exec-all.h"
 #include "tcg-op.h"
 #include "exec/cpu_ldst.h"
+#include "exec/translator.h"
+
 #include "exec/helper-proto.h"
 #include "exec/helper-gen.h"
+
+#include "trace-tcg.h"
 #include "exec/log.h"
+
 
 //static TCGv_env cpu_env;
 
@@ -51,6 +57,10 @@ static TCGv cpu_rampZ;
 static TCGv cpu_r[32];
 static TCGv cpu_eind;
 static TCGv cpu_sp;
+
+/* local register indexes (only used inside old micro ops) */
+static TCGv cpu_tmp0;
+static TCGv_i32 cpu_cc_op;
 
 #define REG(x) (cpu_r[x])
 
@@ -77,10 +87,16 @@ struct InstInfo {
 
 /* This is the state at translation time. */
 struct DisasContext {
-    struct TranslationBlock *tb;
+	DisasContextBase base;
+	struct TranslationBlock *tb;
     CPUZ80State *env;
 
     InstInfo inst[2];/* two consecutive instructions */
+
+    uint64_t flags; /* all execution flags */
+    CCOp cc_op;  /* current CC operation */
+    bool cc_op_dirty;
+    int tf;     /* TF cpu flag */
 
     /* Routine used to access memory */
     int memidx;
@@ -88,19 +104,178 @@ struct DisasContext {
     int singlestep;
 };
 
-static void gen_goto_tb(DisasContext *ctx, int n, target_ulong dest)
+static inline bool hw_local_breakpoint_enabled(unsigned long dr7, int index)
 {
-    TranslationBlock *tb = ctx->tb;
+    return (dr7 >> (index * 2)) & 1;
+}
 
-    if (ctx->singlestep == 0) {
-        tcg_gen_goto_tb(n);
-        tcg_gen_movi_i32(cpu_pc, dest);
-        tcg_gen_exit_tb(tb,n);
+static inline bool hw_global_breakpoint_enabled(unsigned long dr7, int index)
+{
+    return (dr7 >> (index * 2)) & 2;
+
+}
+static inline bool hw_breakpoint_enabled(unsigned long dr7, int index)
+{
+    return hw_global_breakpoint_enabled(dr7, index) ||
+           hw_local_breakpoint_enabled(dr7, index);
+}
+
+static inline int hw_breakpoint_type(unsigned long dr7, int index)
+{
+    return (dr7 >> (DR7_TYPE_SHIFT + (index * 4))) & 3;
+}
+
+static bool check_hw_breakpoints(CPUZ80State *env, bool force_dr6_update)
+{
+    target_ulong dr6;
+    int reg;
+    bool hit_enabled = false;
+
+    dr6 = env->dr[6] & ~0xf;
+    for (reg = 0; reg < DR7_MAX_BP; reg++) {
+        bool bp_match = false;
+        bool wp_match = false;
+
+        switch (hw_breakpoint_type(env->dr[7], reg)) {
+        case DR7_TYPE_BP_INST:
+            if (env->dr[reg] == env->eip) {
+                bp_match = true;
+            }
+            break;
+        case DR7_TYPE_DATA_WR:
+        case DR7_TYPE_DATA_RW:
+            if (env->cpu_watchpoint[reg] &&
+                env->cpu_watchpoint[reg]->flags & BP_WATCHPOINT_HIT) {
+                wp_match = true;
+            }
+            break;
+        case DR7_TYPE_IO_RW:
+            break;
+        }
+        if (bp_match || wp_match) {
+            dr6 |= 1 << reg;
+            if (hw_breakpoint_enabled(env->dr[7], reg)) {
+                hit_enabled = true;
+            }
+        }
+    }
+
+    if (hit_enabled || force_dr6_update) {
+        env->dr[6] = dr6;
+    }
+
+    return hit_enabled;
+}
+
+void helper_single_step(CPUZ80State *env)
+{
+#ifndef CONFIG_USER_ONLY
+    check_hw_breakpoints(env, true);
+    env->dr[6] |= DR6_BS;
+#endif
+    raise_exception(env, EXCP01_DB);
+}
+
+void helper_rechecking_single_step(CPUZ80State *env)
+{
+    if ((env->eflags & TF_MASK) != 0) {
+        helper_single_step(env);
+    }
+}
+
+void helper_reset_rf(CPUZ80State *env)
+{
+    env->eflags &= ~RF_MASK;
+}
+
+static void gen_set_hflag(DisasContext *s, uint32_t mask)
+{
+    if ((s->flags & mask) == 0) {
+        TCGv_i32 t = tcg_temp_new_i32();
+        tcg_gen_ld_i32(t, cpu_env, offsetof(CPUZ80State, hflags));
+        tcg_gen_ori_i32(t, t, mask);
+        tcg_gen_st_i32(t, cpu_env, offsetof(CPUZ80State, hflags));
+        tcg_temp_free_i32(t);
+        s->flags |= mask;
+    }
+}
+
+static void gen_reset_hflag(DisasContext *s, uint32_t mask)
+{
+    if (s->flags & mask) {
+        TCGv_i32 t = tcg_temp_new_i32();
+        tcg_gen_ld_i32(t, cpu_env, offsetof(CPUZ80State, hflags));
+        tcg_gen_andi_i32(t, t, ~mask);
+        tcg_gen_st_i32(t, cpu_env, offsetof(CPUZ80State, hflags));
+        tcg_temp_free_i32(t);
+        s->flags &= ~mask;
+    }
+}
+
+static void gen_update_cc_op(DisasContext *s)
+{
+    if (s->cc_op_dirty) {
+        tcg_gen_movi_i32(cpu_cc_op, s->cc_op);
+        s->cc_op_dirty = false;
+    }
+}
+
+static void
+do_gen_eob_worker(DisasContext *s, bool inhibit, bool recheck_tf, bool jr)
+{
+    gen_update_cc_op(s);
+
+    /* If several instructions disable interrupts, only the first does it.  */
+    if (inhibit && !(s->flags & HF_INHIBIT_IRQ_MASK)) {
+        gen_set_hflag(s, HF_INHIBIT_IRQ_MASK);
     } else {
-        tcg_gen_movi_i32(cpu_pc, dest);
+        gen_reset_hflag(s, HF_INHIBIT_IRQ_MASK);
+    }
+
+    if (s->base.tb->flags & HF_RF_MASK) {
+        helper_reset_rf(cpu_env);
+    }
+    if (s->base.singlestep_enabled) {
         gen_helper_debug(cpu_env);
+    } else if (recheck_tf) {
+        helper_rechecking_single_step(cpu_env);
+        tcg_gen_exit_tb(NULL, 0);
+    } else if (s->tf) {
+        helper_single_step(cpu_env);
+    } else if (jr) {
+        tcg_gen_lookup_and_goto_ptr();
+    } else {
         tcg_gen_exit_tb(NULL, 0);
     }
+    s->base.is_jmp = DISAS_NORETURN;
+}
+
+static inline void gen_op_jmp_v(TCGv dest)
+{
+    tcg_gen_st_tl(dest, cpu_env, offsetof(CPUZ80State, eip));
+}
+
+static inline void
+gen_eob_worker(DisasContext *s, bool inhibit, bool recheck_tf)
+{
+    do_gen_eob_worker(s, inhibit, recheck_tf, false);
+}
+
+static inline void gen_jmp_im(target_ulong pc)
+{
+    tcg_gen_movi_tl(cpu_tmp0, pc);
+    gen_op_jmp_v(cpu_tmp0);
+}
+
+static void gen_eob(DisasContext *s)
+{
+    gen_eob_worker(s, false, false);
+}
+
+static void gen_goto_tb(DisasContext *ctx, int n, target_ulong dest)
+{
+    gen_jmp_im(dest);
+    gen_eob(ctx);
 }
 
 #include "exec/gen-icount.h"

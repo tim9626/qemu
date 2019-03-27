@@ -42,6 +42,30 @@
 #define TARGET_VIRT_ADDR_SPACE_BITS 24
 #define NB_MMU_MODES 2
 
+#define HF_INHIBIT_IRQ_SHIFT 3
+#define HF_RF_SHIFT         16 /* must be same as eflags */
+#define HF_SVMI_SHIFT       21 /* SVM intercepts are active */
+
+#define HF_INHIBIT_IRQ_MASK  (1 << HF_INHIBIT_IRQ_SHIFT)
+#define HF_RF_MASK           (1 << HF_RF_SHIFT)
+#define HF_SVMI_MASK         (1 << HF_SVMI_SHIFT)
+
+#define TF_MASK                 0x00000100
+#define RF_MASK                 0x00010000
+
+#define EXCP01_DB	1
+#define EXCP08_DBLE	8
+#define EXCP0E_PAGE	14
+
+#define DR6_BS          (1 << 14)
+
+#define DR7_TYPE_SHIFT  16
+#define DR7_MAX_BP           4
+#define DR7_TYPE_BP_INST     0x0
+#define DR7_TYPE_DATA_WR     0x1
+#define DR7_TYPE_IO_RW       0x2
+#define DR7_TYPE_DATA_RW     0x3
+
 /*
  *  AVR has two memory spaces, data & code.
  *  e.g. both have 0 address
@@ -78,6 +102,79 @@
 
 #define Z80_CPU_REGS_LAST (Z80_CPU_REGS_BASE + Z80_CPU_REGS - 1)
 #define Z80_CPU_IO_REGS_LAST (Z80_CPU_IO_REGS_BASE + Z80_CPU_IO_REGS - 1)
+
+#define SVM_EXIT_SHUTDOWN	0x07f
+#define SVM_EXIT_EXCP_BASE      0x040
+#define SVM_EXIT_SWINT		0x075
+
+typedef enum {
+    CC_OP_DYNAMIC, /* must use dynamic code to get cc_op */
+    CC_OP_EFLAGS,  /* all cc are explicitly computed, CC_SRC = flags */
+
+    CC_OP_MULB, /* modify all flags, C, O = (CC_SRC != 0) */
+    CC_OP_MULW,
+    CC_OP_MULL,
+    CC_OP_MULQ,
+
+    CC_OP_ADDB, /* modify all flags, CC_DST = res, CC_SRC = src1 */
+    CC_OP_ADDW,
+    CC_OP_ADDL,
+    CC_OP_ADDQ,
+
+    CC_OP_ADCB, /* modify all flags, CC_DST = res, CC_SRC = src1 */
+    CC_OP_ADCW,
+    CC_OP_ADCL,
+    CC_OP_ADCQ,
+
+    CC_OP_SUBB, /* modify all flags, CC_DST = res, CC_SRC = src1 */
+    CC_OP_SUBW,
+    CC_OP_SUBL,
+    CC_OP_SUBQ,
+
+    CC_OP_SBBB, /* modify all flags, CC_DST = res, CC_SRC = src1 */
+    CC_OP_SBBW,
+    CC_OP_SBBL,
+    CC_OP_SBBQ,
+
+    CC_OP_LOGICB, /* modify all flags, CC_DST = res */
+    CC_OP_LOGICW,
+    CC_OP_LOGICL,
+    CC_OP_LOGICQ,
+
+    CC_OP_INCB, /* modify all flags except, CC_DST = res, CC_SRC = C */
+    CC_OP_INCW,
+    CC_OP_INCL,
+    CC_OP_INCQ,
+
+    CC_OP_DECB, /* modify all flags except, CC_DST = res, CC_SRC = C  */
+    CC_OP_DECW,
+    CC_OP_DECL,
+    CC_OP_DECQ,
+
+    CC_OP_SHLB, /* modify all flags, CC_DST = res, CC_SRC.msb = C */
+    CC_OP_SHLW,
+    CC_OP_SHLL,
+    CC_OP_SHLQ,
+
+    CC_OP_SARB, /* modify all flags, CC_DST = res, CC_SRC.lsb = C */
+    CC_OP_SARW,
+    CC_OP_SARL,
+    CC_OP_SARQ,
+
+    CC_OP_BMILGB, /* Z,S via CC_DST, C = SRC==0; O=0; P,A undefined */
+    CC_OP_BMILGW,
+    CC_OP_BMILGL,
+    CC_OP_BMILGQ,
+
+    CC_OP_ADCX, /* CC_DST = C, CC_SRC = rest.  */
+    CC_OP_ADOX, /* CC_DST = O, CC_SRC = rest.  */
+    CC_OP_ADCOX, /* CC_DST = C, CC_SRC2 = O, CC_SRC = rest.  */
+
+    CC_OP_CLR, /* Z set, all other flags clear.  */
+    CC_OP_POPCNT, /* Z via CC_SRC, all other flags clear.  */
+
+    CC_OP_NB,
+} CCOp;
 
 enum z80_features {
     Z80_FEATURE_SRAM,
@@ -120,6 +217,27 @@ typedef struct CPUZ80State CPUZ80State;
 struct CPUZ80State {
     uint32_t pc_w; /* 0x003fffff up to 22 bits */
 
+    target_ulong eflags; /* eflags register. During CPU emulation, CC
+                            flags and DF are set to zero because they are
+                            stored elsewhere */
+    uint32_t hflags; /* TB flags, see HF_xxx constants. These flags
+                           are known at translation time. */
+
+
+    /* exception/interrupt handling */
+    int error_code;
+    int exception_is_int;
+    target_ulong exception_next_eip;
+    target_ulong dr[8]; /* debug registers; note dr4 and dr5 are unused */
+	union {
+		struct CPUBreakpoint *cpu_breakpoint[4];
+		struct CPUWatchpoint *cpu_watchpoint[4];
+	}; /* break/watchpoints for dr[0..3] */
+
+	int old_exception;  /* exception in flight */
+
+    target_ulong eip;
+
     uint32_t sregC; /* 0x00000001 1 bits */
     uint32_t sregZ; /* 0x0000ffff 16 bits, negative logic */
     uint32_t sregN; /* 0x00000001 1 bits */
@@ -157,6 +275,18 @@ static inline void z80_set_feature(CPUZ80State *env, int feature)
 {
     env->features |= (1U << feature);
 }
+
+void cpu_svm_check_intercept_param(CPUZ80State *env1, uint32_t type,
+                                   uint64_t param, uintptr_t retaddr);
+
+void cpu_vmexit(CPUZ80State *nenv, uint32_t exit_code, uint64_t exit_info_1,
+                uintptr_t retaddr);
+
+void helper_single_step(CPUZ80State *env);
+void helper_rechecking_single_step(CPUZ80State *env);
+void helper_reset_rf(CPUZ80State *env);
+
+void QEMU_NORETURN raise_exception(CPUZ80State *env, int exception_index);
 
 #define Z80_CPU_TYPE_SUFFIX "-" TYPE_Z80_CPU
 #define Z80_CPU_TYPE_NAME(model) model Z80_CPU_TYPE_SUFFIX

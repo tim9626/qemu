@@ -30,6 +30,84 @@
 #include "exec/helper-proto.h"
 #include "exec/ioport.h"
 
+void cpu_vmexit(CPUZ80State *nenv, uint32_t exit_code, uint64_t exit_info_1,
+                uintptr_t retaddr)
+{
+    assert(0);
+}
+
+static int check_exception(CPUZ80State *env, int intno, int *error_code,
+                           uintptr_t retaddr)
+{
+    int first_contributory = env->old_exception == 0 ||
+                              (env->old_exception >= 10 &&
+                               env->old_exception <= 13);
+    int second_contributory = intno == 0 ||
+                               (intno >= 10 && intno <= 13);
+
+    qemu_log_mask(CPU_LOG_INT, "check_exception old: 0x%x new 0x%x\n",
+                env->old_exception, intno);
+
+#if !defined(CONFIG_USER_ONLY)
+    if (env->old_exception == EXCP08_DBLE) {
+        if (env->hflags & HF_SVMI_MASK) {
+            cpu_vmexit(env, SVM_EXIT_SHUTDOWN, 0, retaddr); /* does not return */
+        }
+
+        qemu_log_mask(CPU_LOG_RESET, "Triple fault\n");
+
+        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+        return EXCP_HLT;
+    }
+#endif
+
+    if ((first_contributory && second_contributory)
+        || (env->old_exception == EXCP0E_PAGE &&
+            (second_contributory || (intno == EXCP0E_PAGE)))) {
+        intno = EXCP08_DBLE;
+        *error_code = 0;
+    }
+
+    if (second_contributory || (intno == EXCP0E_PAGE) ||
+        (intno == EXCP08_DBLE)) {
+        env->old_exception = intno;
+    }
+
+    return intno;
+}
+
+void cpu_svm_check_intercept_param(CPUZ80State *env, uint32_t type,
+                                   uint64_t param, uintptr_t retaddr)
+{
+}
+
+static void QEMU_NORETURN raise_interrupt2(CPUZ80State *env, int intno,
+                                           int is_int, int error_code,
+                                           int next_eip_addend,
+                                           uintptr_t retaddr)
+{
+    CPUState *cs = CPU(z80_env_get_cpu(env));
+
+    if (!is_int) {
+        cpu_svm_check_intercept_param(env, SVM_EXIT_EXCP_BASE + intno,
+                                      error_code, retaddr);
+        intno = check_exception(env, intno, &error_code, retaddr);
+    } else {
+        cpu_svm_check_intercept_param(env, SVM_EXIT_SWINT, 0, retaddr);
+    }
+
+    cs->exception_index = intno;
+    env->error_code = error_code;
+    env->exception_is_int = is_int;
+    env->exception_next_eip = env->eip + next_eip_addend;
+    cpu_loop_exit_restore(cs, retaddr);
+}
+
+void raise_exception(CPUZ80State *env, int exception_index)
+{
+    raise_interrupt2(env, exception_index, 0, 0, 0, 0);
+}
+
 bool z80_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
 {
     bool ret = false;
