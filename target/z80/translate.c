@@ -59,8 +59,8 @@ static TCGv cpu_eind;
 static TCGv cpu_sp;
 
 /* local register indexes (only used inside old micro ops) */
-static TCGv cpu_tmp0;
-static TCGv_i32 cpu_cc_op;
+/*static TCGv cpu_tmp0;
+static TCGv_i32 cpu_cc_op;*/
 
 #define REG(x) (cpu_r[x])
 
@@ -188,7 +188,7 @@ void helper_reset_rf(CPUZ80State *env)
     env->eflags &= ~RF_MASK;
 }
 
-static void gen_set_hflag(DisasContext *s, uint32_t mask)
+/*static void gen_set_hflag(DisasContext *s, uint32_t mask)
 {
     if ((s->flags & mask) == 0) {
         TCGv_i32 t = tcg_temp_new_i32();
@@ -198,9 +198,9 @@ static void gen_set_hflag(DisasContext *s, uint32_t mask)
         tcg_temp_free_i32(t);
         s->flags |= mask;
     }
-}
+}*/
 
-static void gen_reset_hflag(DisasContext *s, uint32_t mask)
+/*static void gen_reset_hflag(DisasContext *s, uint32_t mask)
 {
     if (s->flags & mask) {
         TCGv_i32 t = tcg_temp_new_i32();
@@ -210,22 +210,22 @@ static void gen_reset_hflag(DisasContext *s, uint32_t mask)
         tcg_temp_free_i32(t);
         s->flags &= ~mask;
     }
-}
+}*/
 
-static void gen_update_cc_op(DisasContext *s)
+/*static void gen_update_cc_op(DisasContext *s)
 {
     if (s->cc_op_dirty) {
         tcg_gen_movi_i32(cpu_cc_op, s->cc_op);
         s->cc_op_dirty = false;
     }
-}
+}*/
 
-static void
+/*static void
 do_gen_eob_worker(DisasContext *s, bool inhibit, bool recheck_tf, bool jr)
 {
     gen_update_cc_op(s);
 
-    /* If several instructions disable interrupts, only the first does it.  */
+    // If several instructions disable interrupts, only the first does it.
     if (inhibit && !(s->flags & HF_INHIBIT_IRQ_MASK)) {
         gen_set_hflag(s, HF_INHIBIT_IRQ_MASK);
     } else {
@@ -233,49 +233,60 @@ do_gen_eob_worker(DisasContext *s, bool inhibit, bool recheck_tf, bool jr)
     }
 
     if (s->base.tb->flags & HF_RF_MASK) {
-        helper_reset_rf(cpu_env);
+        helper_reset_rf((CPUZ80State*)cpu_env);
     }
     if (s->base.singlestep_enabled) {
         gen_helper_debug(cpu_env);
     } else if (recheck_tf) {
-        helper_rechecking_single_step(cpu_env);
+        helper_rechecking_single_step((CPUZ80State*)cpu_env);
         tcg_gen_exit_tb(NULL, 0);
     } else if (s->tf) {
-        helper_single_step(cpu_env);
+        helper_single_step((CPUZ80State*)cpu_env);
     } else if (jr) {
         tcg_gen_lookup_and_goto_ptr();
     } else {
         tcg_gen_exit_tb(NULL, 0);
     }
     s->base.is_jmp = DISAS_NORETURN;
-}
+}*/
 
-static inline void gen_op_jmp_v(TCGv dest)
+/*static inline void gen_op_jmp_v(TCGv dest)
 {
     tcg_gen_st_tl(dest, cpu_env, offsetof(CPUZ80State, eip));
-}
+}*/
 
-static inline void
+/*static inline void
 gen_eob_worker(DisasContext *s, bool inhibit, bool recheck_tf)
 {
     do_gen_eob_worker(s, inhibit, recheck_tf, false);
-}
+}*/
 
-static inline void gen_jmp_im(target_ulong pc)
+/*static inline void gen_jmp_im(target_ulong pc)
 {
     tcg_gen_movi_tl(cpu_tmp0, pc);
     gen_op_jmp_v(cpu_tmp0);
-}
+}*/
 
-static void gen_eob(DisasContext *s)
+/*static void gen_eob(DisasContext *s)
 {
     gen_eob_worker(s, false, false);
-}
+}*/
 
 static void gen_goto_tb(DisasContext *ctx, int n, target_ulong dest)
 {
-    gen_jmp_im(dest);
-    gen_eob(ctx);
+    /*gen_jmp_im(dest);
+    gen_eob(ctx);*/
+    TranslationBlock *tb = ctx->tb;
+
+        if (ctx->singlestep == 0) {
+            tcg_gen_goto_tb(n);
+            tcg_gen_movi_i32(cpu_pc, dest);
+            tcg_gen_exit_tb(tb,n);
+        } else {
+            tcg_gen_movi_i32(cpu_pc, dest);
+            gen_helper_debug(cpu_env);
+            tcg_gen_exit_tb(NULL, 0);
+    }
 }
 
 #include "exec/gen-icount.h"
